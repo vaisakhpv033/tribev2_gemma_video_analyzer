@@ -1,34 +1,155 @@
+"""
+Database models for the Video Creative Analyzer.
+
+Defines the ``VideoAnalysis`` model that tracks each uploaded video,
+its processing state, the analysis mode used, and the structured
+results returned by the LLM pipeline.
+"""
+
 import uuid
+
 from django.db import models
 
 
 class VideoAnalysis(models.Model):
+    """
+    Represents a single video ad analysis job.
+
+    Lifecycle:  PENDING → PROCESSING → COMPLETED | FAILED
+
+    The ``celery_task_id`` field stores the Celery AsyncResult ID so callers
+    can query task state independently of the database status field.
+    """
+
+    # ------------------------------------------------------------------
+    # Status choices
+    # ------------------------------------------------------------------
     STATUS_CHOICES = [
-        ('PENDING', 'Pending'),
-        ('PROCESSING', 'Processing'),
-        ('COMPLETED', 'Completed'),
-        ('FAILED', 'Failed'),
+        ("PENDING", "Pending"),
+        ("PROCESSING", "Processing"),
+        ("COMPLETED", "Completed"),
+        ("FAILED", "Failed"),
     ]
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    video_file = models.FileField(upload_to='videos/')
+    # ------------------------------------------------------------------
+    # Analysis mode choices
+    # ------------------------------------------------------------------
+    MODE_CHOICES = [
+        ("combination", "Combination (Flash + Gemma 31B)"),
+        ("gemini_only", "Gemini Flash Only"),
+        ("31b_only_no_audio", "Gemma 31B Visual Only"),
+    ]
+
+    # ------------------------------------------------------------------
+    # Core fields
+    # ------------------------------------------------------------------
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+    video_file = models.FileField(upload_to="videos/")
     original_name = models.CharField(max_length=255)
-    mode = models.CharField(max_length=50, default='combination')
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
-    
-    # Aggregated fields for quick queries / list views
+    mode = models.CharField(
+        max_length=50,
+        choices=MODE_CHOICES,
+        default="combination",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="PENDING",
+    )
+
+    # Celery task tracking — allows querying task state via the Celery
+    # result backend independently of the DB ``status`` field.
+    celery_task_id = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Celery AsyncResult task ID for this analysis job.",
+    )
+
+    # ------------------------------------------------------------------
+    # Aggregated creative metrics (populated after analysis completes)
+    # ------------------------------------------------------------------
     creative_score = models.FloatField(null=True, blank=True)
     hook_rating = models.IntegerField(null=True, blank=True)
     hook_type = models.CharField(max_length=150, null=True, blank=True)
     ad_format_type = models.CharField(max_length=150, null=True, blank=True)
     has_story_narrative = models.BooleanField(null=True, blank=True)
-    
-    # Full analysis JSON structure from the LLM model
+
+    # Full structured JSON analysis from the LLM pipeline
     raw_analysis = models.JSONField(null=True, blank=True)
-    
+
+    # Error details when status == FAILED
     error_message = models.TextField(null=True, blank=True)
+
+    # ------------------------------------------------------------------
+    # Timestamps
+    # ------------------------------------------------------------------
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
-    def __str__(self):
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Video Analysis"
+        verbose_name_plural = "Video Analyses"
+
+    def __str__(self) -> str:
         return f"{self.original_name} - {self.status} (Score: {self.creative_score})"
+
+    # ------------------------------------------------------------------
+    # Convenience helpers
+    # ------------------------------------------------------------------
+    def mark_processing(self) -> None:
+        """Transition the job to PROCESSING state."""
+        self.status = "PROCESSING"
+        self.save(update_fields=["status"])
+
+    def mark_completed(self, analysis_data: dict) -> None:
+        """
+        Populate aggregated fields from the parsed LLM response and
+        transition the job to COMPLETED.
+        """
+        from django.utils import timezone
+
+        self.raw_analysis = analysis_data
+        self.creative_score = float(analysis_data.get("creative_score", 0))
+
+        hook_data = analysis_data.get("hook", {})
+        self.hook_rating = int(hook_data.get("scroll_stopper_rating", 0))
+        self.hook_type = hook_data.get("hook_type", "")
+
+        trope_data = analysis_data.get("trope_analysis", {})
+        self.ad_format_type = trope_data.get("ad_format_type", "")
+        self.has_story_narrative = bool(trope_data.get("has_story_narrative", False))
+
+        self.status = "COMPLETED"
+        self.error_message = None
+        self.completed_at = timezone.now()
+        self.save()
+
+    def mark_failed(self, error: str) -> None:
+        """Transition the job to FAILED with an error message."""
+        from django.utils import timezone
+
+        self.status = "FAILED"
+        self.error_message = error
+        self.completed_at = timezone.now()
+        self.save(update_fields=["status", "error_message", "completed_at"])
+
+    def reset_for_reanalysis(self) -> None:
+        """Clear all result fields so the job can be re-queued."""
+        self.status = "PENDING"
+        self.creative_score = None
+        self.hook_rating = None
+        self.hook_type = None
+        self.ad_format_type = None
+        self.has_story_narrative = None
+        self.raw_analysis = None
+        self.error_message = None
+        self.completed_at = None
+        self.celery_task_id = None
+        self.save()
