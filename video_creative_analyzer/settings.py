@@ -53,12 +53,20 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+
+    # Third-party
+    'corsheaders',
+    'rest_framework',
+    'django_filters',
+
+    # Local
     'analyzer',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -146,17 +154,84 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
+# Media files (uploaded videos)
+# To switch to S3/GCS, update STORAGES["default"] and install the
+# corresponding backend (e.g. django-storages[s3] or django-storages[google]).
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+# =====================================================================
+# Storage Backend Configuration
+# =====================================================================
+# Default: local filesystem. To switch to S3/GCS, change the BACKEND
+# value and add the required settings (AWS_STORAGE_BUCKET_NAME, etc.).
+# See: https://django-storages.readthedocs.io/
+STORAGES = {
+    "default": {
+        "BACKEND": os.environ.get(
+            "DEFAULT_FILE_STORAGE_BACKEND",
+            "django.core.files.storage.FileSystemStorage",
+        ),
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
+
+# Default primary key field type
+# https://docs.djangoproject.com/en/6.0/ref/settings/#default-auto-field
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# =====================================================================
+# Django REST Framework Configuration
+# =====================================================================
+REST_FRAMEWORK = {
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+    ],
+    'DEFAULT_PARSER_CLASSES': [
+        'rest_framework.parsers.JSONParser',
+        'rest_framework.parsers.MultiPartParser',
+        'rest_framework.parsers.FormParser',
+    ],
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.OrderingFilter',
+    ],
+    'EXCEPTION_HANDLER': 'rest_framework.views.exception_handler',
+}
+
+# =====================================================================
 # Gemini API Settings
+# =====================================================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
+# =====================================================================
 # RunPod API Settings
+# =====================================================================
 RUNPOD_API_KEY = os.environ.get("RUNPOD_API_KEY")
 RUNPOD_TEMPLATE_ID = os.environ.get("RUNPOD_TEMPLATE_ID")
 RUNPOD_GPU_TYPES = [gpu.strip() for gpu in os.environ.get("RUNPOD_GPU_TYPES", "").split(",") if gpu.strip()]
 RUNPOD_IDLE_TIMEOUT_SECONDS = int(os.environ.get("RUNPOD_IDLE_TIMEOUT_SECONDS", "120"))
 
-# Celery Settings
+# =====================================================================
+# Celery Configuration
+# =====================================================================
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 600          # Hard kill after 10 minutes
+CELERY_TASK_SOFT_TIME_LIMIT = 540     # Raise SoftTimeLimitExceeded after 9 minutes
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 
+# =====================================================================
+# CORS Configuration
+# =====================================================================
+CORS_ALLOW_ALL_ORIGINS = True  # For development purposes

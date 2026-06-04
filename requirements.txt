@@ -1,0 +1,24 @@
+# =============================================================================
+# Production Dependencies — Video Creative Analyzer
+# =============================================================================
+# Generated from: pip freeze (pinned versions for reproducibility)
+# Last updated: 2026-06-04
+# =============================================================================
+
+# Core Framework
+Django==6.0.6
+djangorestframework==3.17.1
+django-filter==25.2
+
+# Database
+psycopg2-binary==2.9.12
+
+# Task Queue
+celery==5.6.3
+redis==8.0.0
+
+# Google Gemini AI SDK
+google-genai==2.8.0
+
+# Environment Management
+python-dotenv==1.2.2
