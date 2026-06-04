@@ -1,9 +1,9 @@
 """
 DRF views for the Video Creative Analyzer API.
 
-Provides a single ``VideoAnalysisViewSet`` that handles all CRUD operations
-and the custom ``reanalyze`` action. No Django template views — this is a
-pure API backend for the React frontend.
+Provides a ``VideoAnalysisViewSet`` that handles all CRUD operations
+and the custom ``reanalyze`` action, plus a standalone ``BrainAnalysisView``
+for triggering brain feature extraction and CTR prediction.
 """
 
 import logging
@@ -14,14 +14,20 @@ from rest_framework import filters, mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from .models import VideoAnalysis
 from .serializers import (
+    BrainAnalysisCreateSerializer,
     VideoAnalysisCreateSerializer,
     VideoAnalysisDetailSerializer,
     VideoAnalysisListSerializer,
 )
-from .tasks import run_analysis_task
+from .tasks import (
+    run_analysis_task,
+    run_brain_analysis_task,
+    run_brain_analysis_from_video_task,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -167,3 +173,90 @@ class VideoAnalysisViewSet(
             analysis, context={"request": request}
         )
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+# ======================================================================
+# Brain Analysis Endpoint
+# ======================================================================
+
+class BrainAnalysisView(APIView):
+    """
+    Trigger brain feature extraction and XGBoost CTR prediction.
+
+    ``POST /api/v1/brain-analysis/``
+
+    Accepts ``multipart/form-data`` with fields:
+        - ``analysis_id`` (UUID, required):
+            The existing ``VideoAnalysis`` record to attach results to.
+        - ``npz_file`` (file, optional):
+            A TRIBEv2 ``.npz`` prediction file. If omitted, a placeholder
+            task is dispatched (video-to-npz pipeline — not yet implemented).
+
+    Returns:
+        ``202 Accepted`` with the ``analysis_id`` and ``brain_celery_task_id``.
+    """
+
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, *args, **kwargs):
+        serializer = BrainAnalysisCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        analysis_id = serializer.validated_data["analysis_id"]
+        npz_file = serializer.validated_data.get("npz_file")
+
+        analysis = VideoAnalysis.objects.get(id=analysis_id)
+
+        if npz_file:
+            # ── Path A: .npz file provided → real brain analysis ──────
+            analysis.npz_file = npz_file
+            analysis.brain_analysis_status = "PENDING"
+            analysis.save(update_fields=["npz_file", "brain_analysis_status"])
+
+            task = run_brain_analysis_task.delay(str(analysis_id))
+
+            analysis.brain_celery_task_id = task.id
+            analysis.save(update_fields=["brain_celery_task_id"])
+
+            logger.info(
+                "Brain analysis queued: analysis_id=%s, task_id=%s, npz=%s",
+                analysis_id, task.id, npz_file.name,
+            )
+
+            return Response(
+                {
+                    "detail": "Brain analysis task queued successfully.",
+                    "analysis_id": str(analysis_id),
+                    "brain_celery_task_id": task.id,
+                    "pipeline": "npz_direct",
+                },
+                status=status.HTTP_202_ACCEPTED,
+            )
+
+        else:
+            # ── Path B: No .npz → dummy video-to-brain pipeline ───────
+            analysis.brain_analysis_status = "PENDING"
+            analysis.save(update_fields=["brain_analysis_status"])
+
+            task = run_brain_analysis_from_video_task.delay(str(analysis_id))
+
+            analysis.brain_celery_task_id = task.id
+            analysis.save(update_fields=["brain_celery_task_id"])
+
+            logger.info(
+                "Brain-from-video task queued (placeholder): analysis_id=%s, task_id=%s",
+                analysis_id, task.id,
+            )
+
+            return Response(
+                {
+                    "detail": (
+                        "Brain analysis from video is not yet implemented. "
+                        "A placeholder task has been queued."
+                    ),
+                    "analysis_id": str(analysis_id),
+                    "brain_celery_task_id": task.id,
+                    "pipeline": "video_to_brain",
+                },
+                status=status.HTTP_202_ACCEPTED,
+            )

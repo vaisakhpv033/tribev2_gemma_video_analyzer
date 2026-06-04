@@ -2,8 +2,8 @@
 URL configuration for the analyzer app.
 
 Uses DRF's ``DefaultRouter`` to generate RESTful URL patterns for the
-``VideoAnalysisViewSet``. All routes are prefixed with ``api/v1/`` by the
-project-level URL configuration.
+``VideoAnalysisViewSet``. The ``BrainAnalysisView`` is registered as a
+standalone path. All routes are prefixed with ``api/v1/`` by convention.
 """
 
 from django.urls import include, path
@@ -18,4 +18,9 @@ app_name = "analyzer"
 
 urlpatterns = [
     path("api/v1/", include(router.urls)),
+    path(
+        "api/v1/brain-analysis/",
+        views.BrainAnalysisView.as_view(),
+        name="brain-analysis",
+    ),
 ]
