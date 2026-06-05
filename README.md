@@ -110,154 +110,57 @@ celery -A video_creative_analyzer worker -l info
 
 ---
 
-## Hosting on Ubuntu Server (Production)
+## Hosting on Ubuntu Server (Production with Docker Compose)
 
-To deploy this in a production environment on an Ubuntu server, follow these steps.
+The easiest and most reliable way to deploy this project in production on Ubuntu is using **Docker Compose** to run the backend application stack, combined with **Nginx** on the host OS for reverse proxying and static/media file serving.
 
-### 1. Initial Server Setup
+### 1. Prerequisites
+Ensure you have Docker, Docker Compose, and Nginx installed on your Ubuntu server:
 ```bash
 sudo apt update && sudo apt upgrade -y
-sudo apt install python3-pip python3-venv python3-dev libpq-dev postgresql postgresql-contrib nginx curl ffmpeg redis-server -y
+sudo apt install docker.io docker-compose-v2 nginx -y
 ```
 
-### 2. Setup PostgreSQL
-```bash
-sudo -u postgres psql
-```
-Inside the PostgreSQL prompt:
-```sql
-CREATE DATABASE video_creative_analyzer;
-CREATE USER vca_user WITH PASSWORD 'your_secure_password';
-ALTER ROLE vca_user SET client_encoding TO 'utf8';
-ALTER ROLE vca_user SET default_transaction_isolation TO 'read committed';
-ALTER ROLE vca_user SET timezone TO 'UTC';
-GRANT ALL PRIVILEGES ON DATABASE video_creative_analyzer TO vca_user;
-\q
-```
-
-### 3. Project Setup
-Clone the repository to `/var/www/video_creative_analyzer`.
-
+### 2. Project Setup
+Clone the repository to `/var/www/video_creative_analyzer` and copy the production environment settings:
 ```bash
 cd /var/www/video_creative_analyzer
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt gunicorn
+cp .env.production .env
 ```
+Open `.env` and fill in your production values (such as `DJANGO_SECRET`, database password, API keys, etc.).
 
-Set up your `.env` file with `DEBUG=False` and your production settings.
-
-Run migrations and collect static files:
+### 3. Deploy Backend Services
+Run Docker Compose in detached mode to build and spin up the database, redis, Django web app, celery worker, and celery beat:
 ```bash
-python manage.py migrate
-python manage.py collectstatic --noinput
+docker compose up -d --build
 ```
+*Note: This command automatically executes Django database migrations (`python manage.py migrate`) and collects static assets (`python manage.py collectstatic`) inside the web container during startup.*
 
-### 4. Setup Gunicorn (WSGI Server)
+### 4. Configure Host Nginx
+Deploy the host-level Nginx configuration block to proxy API requests to Gunicorn (running inside the Docker web container on port `8020`) and serve static/media files directly from the host filesystem:
 
-Create a systemd socket file `/etc/systemd/system/gunicorn.socket`:
-```ini
-[Unit]
-Description=gunicorn socket
+1. Copy the reference configuration template:
+   ```bash
+   sudo cp nginx-host.conf /etc/nginx/sites-available/video-creative-analyzer.conf
+   ```
+2. Open `/etc/nginx/sites-available/video-creative-analyzer.conf` and adjust `server_name` to match your subdomain, and verify directory aliases match your repository's location.
+3. Enable the site configuration:
+   ```bash
+   sudo ln -s /etc/nginx/sites-available/video-creative-analyzer.conf /etc/nginx/sites-enabled/
+   ```
+4. Verify the configuration syntax and reload Nginx:
+   ```bash
+   sudo nginx -t
+   sudo systemctl reload nginx
+   ```
 
-[Socket]
-ListenStream=/run/gunicorn.sock
-
-[Install]
-WantedBy=sockets.target
-```
-
-Create a systemd service file `/etc/systemd/system/gunicorn.service`:
-```ini
-[Unit]
-Description=gunicorn daemon
-Requires=gunicorn.socket
-After=network.target
-
-[Service]
-User=www-data
-Group=www-data
-WorkingDirectory=/var/www/video_creative_analyzer
-ExecStart=/var/www/video_creative_analyzer/venv/bin/gunicorn \
-          --access-logfile - \
-          --workers 3 \
-          --bind unix:/run/gunicorn.sock \
-          video_creative_analyzer.wsgi:application
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Start and enable Gunicorn:
+### 5. Service Logs and Monitoring
+To monitor running backend services or debug execution, view the container logs:
 ```bash
-sudo systemctl start gunicorn.socket
-sudo systemctl enable gunicorn.socket
+# View logs for all services
+docker compose logs -f
+
+# View logs for celery workers only
+docker compose logs -f celery_worker
 ```
 
-### 5. Setup Celery Systemd Service
-
-Create `/etc/systemd/system/celery.service`:
-```ini
-[Unit]
-Description=Celery Service
-After=network.target
-
-[Service]
-Type=simple
-User=www-data
-Group=www-data
-EnvironmentFile=/var/www/video_creative_analyzer/.env
-WorkingDirectory=/var/www/video_creative_analyzer
-ExecStart=/var/www/video_creative_analyzer/venv/bin/celery -A video_creative_analyzer worker -l info --concurrency=2
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Start and enable Celery:
-```bash
-sudo systemctl start celery
-sudo systemctl enable celery
-```
-
-### 6. Setup Nginx (Reverse Proxy)
-
-Create an Nginx server block `/etc/nginx/sites-available/video_creative_analyzer`:
-```nginx
-server {
-    listen 80;
-    server_name your_domain.com IP_ADDRESS;
-
-    # Increase max upload size for video files
-    client_max_body_size 500M;
-
-    location = /favicon.ico { access_log off; log_not_found off; }
-    
-    location /static/ {
-        alias /var/www/video_creative_analyzer/staticfiles/;
-    }
-
-    location /media/ {
-        alias /var/www/video_creative_analyzer/media/;
-    }
-
-    location / {
-        include proxy_params;
-        proxy_pass http://unix:/run/gunicorn.sock;
-    }
-}
-```
-
-Enable the configuration:
-```bash
-sudo ln -s /etc/nginx/sites-available/video_creative_analyzer /etc/nginx/sites-enabled
-sudo nginx -t
-sudo systemctl restart nginx
-```
-
-### 7. Cloud Storage (Optional but Recommended)
-For production, it is highly recommended to store uploaded videos in an S3-compatible storage rather than the local filesystem.
-1. Install `django-storages` and `boto3`: `pip install django-storages boto3`
-2. Update the `.env` file to include AWS credentials.
-3. Update `STORAGES` in `settings.py` to use `storages.backends.s3boto3.S3Boto3Storage`.
