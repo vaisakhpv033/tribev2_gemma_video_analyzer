@@ -234,7 +234,7 @@ class BrainAnalysisView(APIView):
             )
 
         else:
-            # ── Path B: No .npz → dummy video-to-brain pipeline ───────
+            # ── Path B: No .npz → trigger full GPU pod pipeline ───────
             analysis.brain_analysis_status = "PENDING"
             analysis.save(update_fields=["brain_analysis_status"])
 
@@ -244,16 +244,13 @@ class BrainAnalysisView(APIView):
             analysis.save(update_fields=["brain_celery_task_id"])
 
             logger.info(
-                "Brain-from-video task queued (placeholder): analysis_id=%s, task_id=%s",
+                "Full GPU brain analysis task queued: analysis_id=%s, task_id=%s",
                 analysis_id, task.id,
             )
 
             return Response(
                 {
-                    "detail": (
-                        "Brain analysis from video is not yet implemented. "
-                        "A placeholder task has been queued."
-                    ),
+                    "detail": "GPU brain analysis task queued successfully.",
                     "analysis_id": str(analysis_id),
                     "brain_celery_task_id": task.id,
                     "pipeline": "video_to_brain",

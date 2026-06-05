@@ -294,31 +294,45 @@ def run_brain_analysis_task(self, analysis_id: str) -> dict:
 )
 def run_brain_analysis_from_video_task(self, analysis_id: str) -> dict:
     """
-    Placeholder Celery task for brain analysis directly from video.
+    Celery task: orchestrate brain analysis directly from video.
 
-    This task will eventually orchestrate:
-        1. Send the video to TRIBEv2 backend for neural prediction.
-        2. Receive the .npz result.
-        3. Delegate to ``run_brain_analysis_task`` for feature extraction.
-
-    Currently returns a stub response.
+    Delegates the heavy lifting to ``gpu_pods.tasks.run_gpu_analysis_task``
+    which manages the full RunPod pod lifecycle:
+        1. Spin up a dedicated GPU pod.
+        2. Upload the video to TRIBEv2 for neural inference.
+        3. Download the resulting ``.npz`` file.
+        4. Tear down the pod (guaranteed via ``finally``).
+        5. Chain ``run_brain_analysis_task`` for feature extraction.
 
     Args:
         analysis_id: UUID string of the ``VideoAnalysis`` record.
 
     Returns:
-        dict with ``status`` = ``NOT_IMPLEMENTED``.
+        dict with ``status`` and ``analysis_id``.
     """
+    from gpu_pods.tasks import run_gpu_analysis_task
+
     logger.info(
-        "Brain-from-video task called for id=%s — NOT YET IMPLEMENTED.",
+        "Delegating brain-from-video analysis to gpu_pods for id=%s.",
         analysis_id,
     )
+
+    task = run_gpu_analysis_task.delay(str(analysis_id))
+
+    # Store the GPU task ID so callers can track progress
+    VideoAnalysis.objects.filter(id=analysis_id).update(
+        brain_celery_task_id=task.id,
+        brain_analysis_status="PENDING",
+    )
+
+    logger.info(
+        "GPU analysis task dispatched: analysis_id=%s, gpu_task_id=%s",
+        analysis_id, task.id,
+    )
     return {
-        "status": "NOT_IMPLEMENTED",
+        "status": "DISPATCHED",
         "analysis_id": analysis_id,
-        "message": (
-            "Brain analysis from raw video is not yet implemented. "
-            "Please upload a .npz prediction file directly."
-        ),
+        "gpu_task_id": task.id,
     }
+
 
