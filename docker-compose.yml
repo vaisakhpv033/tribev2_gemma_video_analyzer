@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
   db:
@@ -10,9 +9,15 @@ services:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     ports:
-      - "${DB_PORT}:5432"
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # Ensures Postgres is ready to accept connections before web/workers boot
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -23,45 +28,63 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
+      # Ensures Redis is ready
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
 
+  web:
+    build: .
+    container_name: video_creative_analyzer_web
+    # Run migrations and collect static files before launching Gunicorn
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput &&
+             gunicorn --bind 0.0.0.0:8000 --workers 3 video_creative_analyzer.wsgi:application"
+    env_file: .env
+    restart: always
+    ports:
+      # Map container port 8000 to a customizable host port (default: 8020) to avoid conflicts
+      - "${BACKEND_PORT:-8020}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      # Bind-mount directories to the host so host Nginx can serve static and media files directly
+      - ./staticfiles:/app/staticfiles
+      - ./media:/app/media
+
   celery_worker:
     build: .
     container_name: video_creative_analyzer_celery_worker
-    command: >
-      celery -A video_creative_analyzer worker
-      --loglevel=info
-      --queues=default
-      --concurrency=2
+    command: celery -A video_creative_analyzer worker --loglevel=info --queues=default --concurrency=2
     env_file: .env
     restart: always
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
-      db:
-        condition: service_started
     volumes:
-      - media_data:/app/media
+      # Celery worker needs access to media folder to process videos and save outputs
+      - ./media:/app/media
 
   celery_beat:
     build: .
     container_name: video_creative_analyzer_celery_beat
-    command: >
-      celery -A video_creative_analyzer beat
-      --loglevel=info
-      --scheduler=django_celery_beat.schedulers:DatabaseScheduler
+    # Start Celery Beat with standard default scheduler
+    command: celery -A video_creative_analyzer beat --loglevel=info
     env_file: .env
     restart: always
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
-      db:
-        condition: service_started
 
 volumes:
   postgres_data:
   redis_data:
-  media_data:
