@@ -61,6 +61,8 @@ INSTALLED_APPS = [
 
     # Local
     'analyzer',
+    'gpu_pods',
+    'performance_analyzer',
 ]
 
 MIDDLEWARE = [
