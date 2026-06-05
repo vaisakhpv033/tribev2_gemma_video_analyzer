@@ -266,13 +266,19 @@ import re
 import mimetypes
 from django.http import StreamingHttpResponse, Http404
 from django.conf import settings
+from django.utils._os import safe_join
+from django.core.exceptions import SuspiciousFileOperation
 
 def serve_media_with_range(request, path):
     """
     Serve a media file while supporting HTTP Range requests (206 Partial Content)
     to enable HTML5 video scrubbing and seeking in browsers during local development.
     """
-    fullpath = os.path.join(settings.MEDIA_ROOT, path)
+    try:
+        fullpath = safe_join(settings.MEDIA_ROOT, path)
+    except (ValueError, SuspiciousFileOperation):
+        raise Http404("File not found")
+
     if not os.path.exists(fullpath) or os.path.isdir(fullpath):
         raise Http404("File not found")
 
