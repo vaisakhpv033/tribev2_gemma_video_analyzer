@@ -260,3 +260,71 @@ class BrainAnalysisView(APIView):
                 },
                 status=status.HTTP_202_ACCEPTED,
             )
+
+
+import re
+import mimetypes
+from django.http import StreamingHttpResponse, Http404
+from django.conf import settings
+
+def serve_media_with_range(request, path):
+    """
+    Serve a media file while supporting HTTP Range requests (206 Partial Content)
+    to enable HTML5 video scrubbing and seeking in browsers during local development.
+    """
+    fullpath = os.path.join(settings.MEDIA_ROOT, path)
+    if not os.path.exists(fullpath) or os.path.isdir(fullpath):
+        raise Http404("File not found")
+
+    filesize = os.path.getsize(fullpath)
+    content_type, _ = mimetypes.guess_type(fullpath)
+    if not content_type:
+        content_type = "video/mp4"
+
+    range_header = request.META.get('HTTP_RANGE', '').strip()
+    range_match = re.match(r'bytes=(\d+)-(\d*)', range_header)
+
+    if range_match:
+        first_byte, last_byte = range_match.groups()
+        first_byte = int(first_byte) if first_byte else 0
+        last_byte = int(last_byte) if last_byte else filesize - 1
+        if last_byte >= filesize:
+            last_byte = filesize - 1
+
+        length = last_byte - first_byte + 1
+
+        def file_iterator(fn, offset, len_to_read):
+            with open(fn, 'rb') as f:
+                f.seek(offset)
+                remaining = len_to_read
+                while remaining > 0:
+                    chunk_size = min(remaining, 8192)
+                    data = f.read(chunk_size)
+                    if not data:
+                        break
+                    yield data
+                    remaining -= len(data)
+
+        response = StreamingHttpResponse(
+            file_iterator(fullpath, first_byte, length),
+            status=206,
+            content_type=content_type
+        )
+        response['Content-Range'] = f'bytes {first_byte}-{last_byte}/{filesize}'
+        response['Content-Length'] = str(length)
+        response['Accept-Ranges'] = 'bytes'
+        return response
+    else:
+        def file_iterator(fn):
+            with open(fn, 'rb') as f:
+                while True:
+                    data = f.read(8192)
+                    if not data:
+                        break
+                    yield data
+
+        response = StreamingHttpResponse(file_iterator(fullpath), content_type=content_type)
+        response['Content-Length'] = str(filesize)
+        response['Accept-Ranges'] = 'bytes'
+        return response
+

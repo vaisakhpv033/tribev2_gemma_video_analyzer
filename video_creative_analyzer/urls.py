@@ -19,4 +19,9 @@ urlpatterns = [
 # In production, media should be served by the reverse proxy (nginx)
 # or directly from cloud storage (S3/GCS).
 if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    from django.urls import re_path
+    from analyzer.views import serve_media_with_range
+    urlpatterns += [
+        re_path(r'^media/(?P<path>.*)$', serve_media_with_range),
+    ]
+
