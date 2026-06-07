@@ -40,4 +40,5 @@ USER appuser
 EXPOSE 8000
 
 # Default command (will be overridden in docker-compose for Celery workers)
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "video_creative_analyzer.wsgi:application"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--access-logfile", "-", "video_creative_analyzer.wsgi:application"]
+
