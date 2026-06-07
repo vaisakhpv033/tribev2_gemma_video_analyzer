@@ -21,3 +21,6 @@ env/
 .DS_Store
 
 media/
+
+# Deployment references (private)
+deployment_refreshment.md
