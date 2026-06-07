@@ -243,4 +243,10 @@ CELERY_BEAT_SCHEDULE = {
 # =====================================================================
 # CORS Configuration
 # =====================================================================
-CORS_ALLOW_ALL_ORIGINS = True  # For development purposes
+cors_allowed_origins_env = os.environ.get("CORS_ALLOWED_ORIGINS")
+if cors_allowed_origins_env:
+    CORS_ALLOWED_ORIGINS = [origin.strip() for origin in cors_allowed_origins_env.split(",") if origin.strip()]
+    CORS_ALLOW_ALL_ORIGINS = False
+else:
+    CORS_ALLOW_ALL_ORIGINS = True  # Default fallback for simple setup
+
