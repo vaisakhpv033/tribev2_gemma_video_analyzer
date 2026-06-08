@@ -65,7 +65,8 @@ services:
   celery_worker:
     build: .
     container_name: video_creative_analyzer_celery_worker
-    command: celery -A video_creative_analyzer worker --loglevel=info --queues=default --concurrency=2
+    command: celery -A video_creative_analyzer worker --loglevel=info --concurrency=2
+
     env_file: .env
     environment:
       - DB_HOST=db
