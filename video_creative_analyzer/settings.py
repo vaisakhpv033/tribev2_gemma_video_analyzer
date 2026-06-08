@@ -43,6 +43,10 @@ elif DEBUG:
 else:
     ALLOWED_HOSTS = []
 
+# Honor the X-Forwarded-Proto header from Nginx for request.is_secure() checks
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+
 
 # Application definition
 
