@@ -5,6 +5,7 @@ FROM python:3.12-slim
 # Prevent Python from writing .pyc files and enable unbuffered logging
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV NILEARN_DATA=/app/nilearn_data
 
 # Set the working directory inside the container
 WORKDIR /app
@@ -28,12 +29,12 @@ RUN pip install --no-cache-dir --upgrade pip \
 # Copy the rest of the application code
 COPY . /app/
 
-# Create media and staticfile directories
-RUN mkdir -p /app/staticfiles /app/media
+# Create media, staticfile, and nilearn_data directories
+RUN mkdir -p /app/staticfiles /app/media /app/nilearn_data
 
 # Security Best Practice: Run container as a non-root user
-# Define user appuser with UID 8888 and assign directory permissions
-RUN useradd -u 8888 appuser && chown -R appuser:appuser /app
+# Define user appuser with UID 8888, create home directory, and assign directory permissions
+RUN useradd -m -u 8888 appuser && chown -R appuser:appuser /app
 USER appuser
 
 # Expose Django backend port
