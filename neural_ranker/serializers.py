@@ -102,7 +102,7 @@ class RankingSessionDetailSerializer(serializers.ModelSerializer):
     Full detail view — includes result_summary and nested ranked videos.
     """
 
-    videos = RankedVideoListSerializer(many=True, read_only=True)
+    videos = RankedVideoSerializer(many=True, read_only=True)
 
     class Meta:
         model = RankingSession
