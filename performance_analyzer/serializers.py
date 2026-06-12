@@ -9,6 +9,7 @@ class PerformanceVideoSerializer(serializers.ModelSerializer):
             'filename',
             'tier',
             'actual_ctr',
+            'impressions',
             'brain_predicted_ctr',
             'brain_timeseries'
         ]

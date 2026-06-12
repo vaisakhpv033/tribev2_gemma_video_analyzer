@@ -7,6 +7,7 @@ class PerformanceVideoAdmin(admin.ModelAdmin):
         "filename",
         "tier",
         "actual_ctr",
+        "impressions",
         "brain_predicted_ctr",
         "brain_predicted_class",
         "created_at",

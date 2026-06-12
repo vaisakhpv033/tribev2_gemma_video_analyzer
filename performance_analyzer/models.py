@@ -9,15 +9,17 @@ class PerformanceVideo(models.Model):
     TIER_CHOICES = [
         ("TOP", "Top Performing"),
         ("BOTTOM", "Bottom Performing"),
+        ("COMPETITOR_SUCCESS", "Competitor Success"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     filename = models.CharField(max_length=255, help_text="Original NPZ filename")
-    tier = models.CharField(max_length=10, choices=TIER_CHOICES)
+    tier = models.CharField(max_length=20, choices=TIER_CHOICES)
     npz_file = models.FileField(upload_to="npz_files/performance/", help_text="Path to the NPZ file")
     
     # User will update this from the admin panel
     actual_ctr = models.FloatField(null=True, blank=True, help_text="Actual CTR (to be updated from admin)")
+    impressions = models.BigIntegerField(null=True, blank=True, help_text="Number of impressions")
 
     # ------------------------------------------------------------------
     # Brain analysis fields (populated by the brain analysis pipeline)
