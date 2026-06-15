@@ -34,6 +34,7 @@ class RankingSession(models.Model):
         ("narrative_ads", "Narrative Ads (Story + Memory)"),
         ("music_video", "Music Video (Audio + Emotion)"),
         ("brand_awareness", "Brand Awareness (Memory + Emotion)"),
+        ("custom", "Custom Weighting"),
     ]
 
     NORMALIZATION_CHOICES = [

@@ -204,3 +204,31 @@ class RankingSessionCreateSerializer(serializers.Serializer):
                 )
 
         return value
+
+
+class RankingSessionRecalculateSerializer(serializers.Serializer):
+    """
+    Serializer for recalculating an existing ranking session.
+    """
+    custom_weights = serializers.JSONField(
+        required=True,
+        help_text="Dimension weights to apply for recalculation (JSON dict).",
+    )
+
+    def validate_custom_weights(self, value):
+        """Reuse the validation logic from CreateSerializer."""
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("custom_weights must be a JSON object.")
+
+        valid_dims = set(WEIGHT_PRESETS["default"].keys())
+        for key, weight in value.items():
+            if key not in valid_dims:
+                raise serializers.ValidationError(
+                    f"Unknown dimension '{key}'. Valid: {', '.join(sorted(valid_dims))}"
+                )
+            if not isinstance(weight, (int, float)) or weight < 0:
+                raise serializers.ValidationError(
+                    f"Weight for '{key}' must be a non-negative number."
+                )
+
+        return value

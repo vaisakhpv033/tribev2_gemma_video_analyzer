@@ -97,9 +97,10 @@ DIMENSION_FORMULAS = {
     },
     "visual_engagement": {
         "features": {
-            "visual_mean": {"weight": 0.30, "invert": False},
-            "calcarine_mean": {"weight": 0.20, "invert": False},
-            "fusiform_mean": {"weight": 0.20, "invert": False},
+            "visual_mean": {"weight": 0.20, "invert": False},
+            "vis_net_mean": {"weight": 0.20, "invert": False},
+            "calcarine_mean": {"weight": 0.15, "invert": False},
+            "fusiform_mean": {"weight": 0.15, "invert": False},
             "visual_peak": {"weight": 0.15, "invert": False},
             "visual_std": {"weight": 0.15, "invert": False},
         },
@@ -220,12 +221,17 @@ class NeuralRankingConfig:
 
     @classmethod
     def from_preset(cls, preset_name: str, **overrides) -> NeuralRankingConfig:
-        if preset_name not in WEIGHT_PRESETS:
+        if preset_name == "custom":
+            # Start with default weights, custom_weights will override them later
+            weights = deepcopy(WEIGHT_PRESETS["default"])
+        elif preset_name not in WEIGHT_PRESETS:
             raise ValueError(
                 f"Unknown preset '{preset_name}'. "
-                f"Available: {', '.join(WEIGHT_PRESETS.keys())}"
+                f"Available: {', '.join(WEIGHT_PRESETS.keys())}, custom"
             )
-        weights = deepcopy(WEIGHT_PRESETS[preset_name])
+        else:
+            weights = deepcopy(WEIGHT_PRESETS[preset_name])
+            
         weights.update(overrides.get("dimension_weights", {}))
         return cls(
             dimension_weights=weights,

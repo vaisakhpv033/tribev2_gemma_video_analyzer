@@ -323,6 +323,7 @@ def _build_summary(
         "n_videos": len(filenames),
         "preset": config.preset_name,
         "normalization": config.normalization,
+        "effective_weights": dict(config.dimension_weights),
         "score_stats": {
             "min": round(float(overall.min()), 2),
             "max": round(float(overall.max()), 2),

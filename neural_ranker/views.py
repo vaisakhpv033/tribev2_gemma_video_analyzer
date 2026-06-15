@@ -14,7 +14,7 @@ from pathlib import Path
 from django.db import transaction
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.parsers import FormParser, MultiPartParser, JSONParser
 from rest_framework.response import Response
 
 from .models import RankedVideo, RankingSession
@@ -43,7 +43,7 @@ class RankingSessionViewSet(
     """
 
     queryset = RankingSession.objects.all()
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -196,3 +196,79 @@ class RankingSessionViewSet(
             if video.npz_file:
                 video.npz_file.delete(save=False)
         instance.delete()
+
+    @action(detail=True, methods=["post"])
+    def recalculate(self, request, pk=None):
+        """
+        Recalculate ranking scores using new custom weights.
+        Re-uses the already extracted raw_features from the DB.
+        """
+        session = self.get_object()
+
+        if session.status != "COMPLETED":
+            return Response(
+                {"detail": "Can only recalculate completed sessions."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        from .serializers import RankingSessionRecalculateSerializer
+        serializer = RankingSessionRecalculateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        custom_weights = serializer.validated_data["custom_weights"]
+
+        videos = list(session.videos.all())
+        if len(videos) < 2:
+            return Response(
+                {"detail": "Session must have at least 2 videos to rank."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 1. Reconstruct features_by_video from saved raw_features
+        features_by_video = {}
+        for video in videos:
+            if not video.raw_features:
+                return Response(
+                    {"detail": f"Video {video.filename} is missing raw features."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            features_by_video[video.filename] = video.raw_features
+
+        # 2. Update session config
+        session.preset = "custom"
+        session.custom_weights = custom_weights
+        session.save(update_fields=["preset", "custom_weights"])
+
+        try:
+            # 3. Re-run ranking engine
+            config = NeuralRankingConfig.from_session(session)
+            report = rank_videos(features_by_video, config)
+
+            # 4. Save results back
+            with transaction.atomic():
+                for result in report.videos:
+                    video = next(v for v in videos if v.filename == result.filename)
+                    video.rank = result.rank
+                    video.overall_score = result.overall_score
+                    video.dimension_scores = result.dimension_scores
+                    video.strengths = result.strengths
+                    video.weaknesses = result.weaknesses
+                    video.save(update_fields=[
+                        "rank", "overall_score", "dimension_scores",
+                        "strengths", "weaknesses"
+                    ])
+
+                session.mark_completed(report.summary)
+                logger.info("Session %s recalculated successfully.", session.id)
+
+            # Return updated session detail
+            session.refresh_from_db()
+            response_serializer = RankingSessionDetailSerializer(session)
+            return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+        except Exception as exc:
+            logger.exception("Recalculation failed for session %s: %s", session.id, exc)
+            return Response(
+                {"detail": f"Recalculation failed: {str(exc)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
