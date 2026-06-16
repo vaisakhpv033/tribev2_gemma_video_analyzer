@@ -1,9 +1,12 @@
 import os
 import glob
 import csv
+import json
+import re
 from pathlib import Path
 from django.core.management.base import BaseCommand
 from django.core.files import File
+from django.conf import settings
 from performance_analyzer.models import PerformanceVideo
 from analyzer.utils.brain_service import analyzer, predictor
 
@@ -21,6 +24,16 @@ class Command(BaseCommand):
         if not csv_file_path.exists():
             self.stdout.write(self.style.ERROR(f"CSV file {csv_file_path} does not exist."))
             return
+
+        # Load metadata.json
+        metadata_path = Path(settings.BASE_DIR) / 'metadata.json'
+        metadata = {}
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+            except Exception as e:
+                self.stdout.write(self.style.WARNING(f"Failed to load metadata.json: {e}"))
 
         # 1. Parse CSV and build a dictionary of asset_id -> impressions
         impressions_map = {}
@@ -48,14 +61,31 @@ class Command(BaseCommand):
             
         self.stdout.write(self.style.NOTICE(f"Found {len(npz_files)} .npz files. Processing..."))
 
+        def sanitize_part(s):
+            if not s:
+                return ""
+            return re.sub(r'[\\/*?:"<>|]', '', s).strip()
+
         for npz_file_path in npz_files:
             npz_path_obj = Path(npz_file_path)
-            filename = npz_path_obj.name
+            original_filename = npz_path_obj.name
             
-            # Match asset_id from CSV to filename
+            # Match old_filename in metadata keys to construct new name
+            target_filename = original_filename
+            if original_filename in metadata:
+                entry = metadata[original_filename]
+                platform = entry.get("platform", "")
+                tags = entry.get("Tags", "")
+                title = entry.get("Title", "")
+                
+                parts = [sanitize_part(platform), sanitize_part(tags), sanitize_part(title), original_filename]
+                parts = [p for p in parts if p]
+                target_filename = "_".join(parts)
+
+            # Match asset_id from CSV to original_filename
             matched_asset_id = None
             for asset_id in impressions_map.keys():
-                if asset_id in filename:
+                if asset_id in original_filename:
                     matched_asset_id = asset_id
                     break
                     
@@ -63,16 +93,16 @@ class Command(BaseCommand):
             if matched_asset_id:
                 impressions = impressions_map[matched_asset_id]
             else:
-                self.stdout.write(self.style.WARNING(f"Could not find impressions for {filename} in CSV."))
+                self.stdout.write(self.style.WARNING(f"Could not find impressions for {original_filename} in CSV."))
 
             # 3. Get or create the PerformanceVideo record
-            video = PerformanceVideo.objects.filter(filename=filename, tier="COMPETITOR_SUCCESS").first()
+            video = PerformanceVideo.objects.filter(filename=target_filename, tier="COMPETITOR_SUCCESS").first()
             created = False
             if not video:
-                video = PerformanceVideo(filename=filename, tier="COMPETITOR_SUCCESS")
+                video = PerformanceVideo(filename=target_filename, tier="COMPETITOR_SUCCESS")
                 # Save the .npz file using Django's File storage to copy it to MEDIA_ROOT
                 with open(npz_file_path, 'rb') as f:
-                    video.npz_file.save(filename, File(f), save=False)
+                    video.npz_file.save(target_filename, File(f), save=False)
                 created = True
             
             # Update impressions (even if it already existed)
@@ -80,11 +110,11 @@ class Command(BaseCommand):
             video.save()
 
             if created:
-                self.stdout.write(self.style.SUCCESS(f"Created new record for {filename} with {impressions} impressions."))
+                self.stdout.write(self.style.SUCCESS(f"Created new record for {target_filename} with {impressions} impressions."))
             else:
-                self.stdout.write(self.style.SUCCESS(f"Record for {filename} already exists, updated impressions. Analyzing again."))
+                self.stdout.write(self.style.SUCCESS(f"Record for {target_filename} already exists, updated impressions. Analyzing again."))
 
-            self.stdout.write(f"Analyzing {filename}...")
+            self.stdout.write(f"Analyzing {target_filename}...")
             
             try:
                 # 4. Extract brain features and timeseries using the original path for analysis
@@ -108,9 +138,9 @@ class Command(BaseCommand):
                 
                 video.save()
                 
-                self.stdout.write(self.style.SUCCESS(f"Analysis completed for {filename}: Predicted CTR = {video.brain_predicted_ctr:.2f}%"))
+                self.stdout.write(self.style.SUCCESS(f"Analysis completed for {target_filename}: Predicted CTR = {video.brain_predicted_ctr:.2f}%"))
 
             except Exception as e:
-                self.stdout.write(self.style.ERROR(f"Error analyzing {filename}: {e}"))
+                self.stdout.write(self.style.ERROR(f"Error analyzing {target_filename}: {e}"))
                 
         self.stdout.write(self.style.SUCCESS("Finished ingesting and analyzing competitor success videos."))

@@ -161,9 +161,36 @@ class RankedVideo(models.Model):
         max_length=255,
         help_text="Original NPZ filename (without extension).",
     )
+    video_file = models.FileField(
+        upload_to="videos/rankings/",
+        null=True,
+        blank=True,
+        help_text="Uploaded video file for background processing.",
+    )
     npz_file = models.FileField(
         upload_to="npz_files/rankings/",
-        help_text="Uploaded TRIBEv2 .npz prediction file.",
+        null=True,
+        blank=True,
+        help_text="Uploaded or generated TRIBEv2 .npz prediction file.",
+    )
+
+    INFERENCE_STATUS_CHOICES = [
+        ("PENDING", "Pending"),
+        ("PROCESSING", "Processing"),
+        ("COMPLETED", "Completed"),
+        ("FAILED", "Failed"),
+    ]
+    inference_status = models.CharField(
+        max_length=20,
+        choices=INFERENCE_STATUS_CHOICES,
+        default="PENDING",
+        db_index=True,
+        help_text="Status of the background RunPod inference pipeline.",
+    )
+    error_message = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Error details when inference_status == FAILED.",
     )
 
     # ------------------------------------------------------------------

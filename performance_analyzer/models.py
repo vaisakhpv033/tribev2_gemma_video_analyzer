@@ -15,7 +15,7 @@ class PerformanceVideo(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     filename = models.CharField(max_length=255, help_text="Original NPZ filename")
     tier = models.CharField(max_length=20, choices=TIER_CHOICES)
-    npz_file = models.FileField(upload_to="npz_files/performance/", help_text="Path to the NPZ file")
+    npz_file = models.FileField(upload_to="npz_files/performance/", max_length=255, help_text="Path to the NPZ file")
     
     # User will update this from the admin panel
     actual_ctr = models.FloatField(null=True, blank=True, help_text="Actual CTR (to be updated from admin)")

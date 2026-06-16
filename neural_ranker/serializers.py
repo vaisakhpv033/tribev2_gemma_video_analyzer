@@ -232,3 +232,87 @@ class RankingSessionRecalculateSerializer(serializers.Serializer):
                 )
 
         return value
+
+
+class RankingSessionVideoCreateSerializer(serializers.Serializer):
+    """
+    Write-only serializer for creating a ranking session from video files.
+
+    Accepts:
+        - ``video_files``     — List of video file uploads (2 to 10 required).
+        - ``name``            — Optional label for the session.
+        - ``preset``          — Weight preset name (default: 'default').
+        - ``normalization``   — Normalization method (default: 'minmax').
+        - ``custom_weights``  — Optional JSON dict of dimension weight overrides.
+    """
+
+    video_files = serializers.ListField(
+        child=serializers.FileField(),
+        min_length=2,
+        max_length=10,
+        help_text="List of video files (minimum 2, maximum 10).",
+    )
+    name = serializers.CharField(
+        required=False,
+        default="",
+        max_length=255,
+        help_text="Optional label for this ranking session.",
+    )
+    preset = serializers.ChoiceField(
+        choices=list(RankingSession.PRESET_CHOICES),
+        default="default",
+        help_text="Weight preset profile.",
+    )
+    normalization = serializers.ChoiceField(
+        choices=list(RankingSession.NORMALIZATION_CHOICES),
+        default="minmax",
+        help_text="Cross-video normalization method.",
+    )
+    custom_weights = serializers.JSONField(
+        required=False,
+        default=None,
+        help_text="Optional dimension weight overrides (JSON dict).",
+    )
+
+    def validate_video_files(self, value):
+        """Validate each uploaded file is a valid video file."""
+        max_size = 500 * 1024 * 1024  # 500 MB per video
+
+        valid_extensions = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+
+        for f in value:
+            ext = os.path.splitext(f.name)[1].lower()
+            if ext not in valid_extensions:
+                raise serializers.ValidationError(
+                    f"Unsupported file format '{ext}' for '{f.name}'. "
+                    f"Accepted formats are: {', '.join(valid_extensions)}"
+                )
+            if f.size > max_size:
+                raise serializers.ValidationError(
+                    f"File '{f.name}' ({f.size / (1024 * 1024):.1f} MB) "
+                    f"exceeds the maximum allowed size of 500 MB."
+                )
+
+        return value
+
+    def validate_custom_weights(self, value):
+        """Reuse the validation logic from CreateSerializer."""
+        if value is None:
+            return value
+
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("custom_weights must be a JSON object.")
+
+        valid_dims = set(WEIGHT_PRESETS["default"].keys())
+        for key, weight in value.items():
+            if key not in valid_dims:
+                raise serializers.ValidationError(
+                    f"Unknown dimension '{key}'. Valid: {', '.join(sorted(valid_dims))}"
+                )
+            if not isinstance(weight, (int, float)) or weight < 0:
+                raise serializers.ValidationError(
+                    f"Weight for '{key}' must be a non-negative number."
+                )
+
+        return value
+

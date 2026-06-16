@@ -55,9 +55,9 @@ WEIGHT_PRESETS = {
         "memory_encoding": 0.08, "narrative_language": 0.07,
     },
     "game_ads": {
-        "visual_engagement": 0.25, "attention_capture": 0.20,
+        "visual_engagement": 0.20, "attention_capture": 0.20,
         "emotional_resonance": 0.18, "novelty_salience": 0.12,
-        "sustained_focus": 0.10, "auditory_impact": 0.08,
+        "sustained_focus": 0.15, "auditory_impact": 0.08,
         "memory_encoding": 0.05, "narrative_language": 0.02,
     },
     "narrative_ads": {

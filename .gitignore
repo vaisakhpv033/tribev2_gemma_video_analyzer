@@ -21,7 +21,7 @@ env/
 .DS_Store
 
 media/
-
+metadata.json
 # Deployment references (private)
 deployment_refreshment.md
 performance_videos.json

@@ -33,6 +33,7 @@ from django.conf import settings
 from django.core.files.base import ContentFile
 
 from analyzer.models import VideoAnalysis
+from neural_ranker.models import RankedVideo
 from .runpod_client import (
     RunPodClient,
     PodProvisioningError,
@@ -77,6 +78,22 @@ def _fail(analysis_id: str, error_msg: str) -> None:
     """Mark the pipeline as FAILED with an error message."""
     logger.error("[%s] FAILED: %s", analysis_id, error_msg)
     _update_status(analysis_id, "FAILED", brain_error_message=error_msg)
+
+
+def _update_ranked_video_status(video_id: str, status: str, **extra_fields) -> None:
+    """Atomically update RankedVideo inference_status."""
+    update_fields = {"inference_status": status, **extra_fields}
+    rows = RankedVideo.objects.filter(id=video_id).update(**update_fields)
+    if rows == 0:
+        logger.warning("[%s] RankedVideo DB update: record not found.", video_id)
+    else:
+        logger.info("[%s] inference_status → %s", video_id, status)
+
+
+def _fail_ranked_video(video_id: str, error_msg: str) -> None:
+    """Mark the RankedVideo inference pipeline as FAILED."""
+    logger.error("[%s] RankedVideo FAILED: %s", video_id, error_msg)
+    _update_ranked_video_status(video_id, "FAILED", error_message=error_msg)
 
 
 # ── TRIBEv2 API Interaction ─────────────────────────────────────────────────
@@ -407,6 +424,126 @@ def run_gpu_analysis_task(self, analysis_id: str) -> dict:
                     "Watchdog will clean up.",
                     analysis_id, pod_id, exc,
                 )
+
+
+@shared_task(
+    bind=True,
+    name="gpu_pods.tasks.run_gpu_ranking_video_task",
+    max_retries=3,
+    default_retry_delay=60,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    soft_time_limit=3600,       # 1 hour soft limit
+    time_limit=3660,            # 1 hour + 60s hard kill
+)
+def run_gpu_ranking_video_task(self, ranked_video_id: str) -> dict:
+    """Full GPU pipeline for Neural Ranker: pod → TRIBEv2 inference → .npz.
+
+    After completion, the npz file is saved to RankedVideo.npz_file,
+    and returns to the caller (usually a Celery chord).
+    """
+    attempt = self.request.retries + 1
+    max_attempts = self.max_retries + 1
+    logger.info(
+        "[%s] ═══ Starting GPU Ranking Video Analysis (attempt %d/%d) ═══",
+        ranked_video_id, attempt, max_attempts,
+    )
+
+    try:
+        video = RankedVideo.objects.get(id=ranked_video_id)
+    except RankedVideo.DoesNotExist:
+        logger.error("[%s] RankedVideo record not found. Aborting.", ranked_video_id)
+        return {"status": "ABORTED", "ranked_video_id": ranked_video_id}
+
+    try:
+        video_path = video.video_file.path
+    except (ValueError, AttributeError):
+        _fail_ranked_video(ranked_video_id, "No video file attached to this record.")
+        return {"status": "FAILED", "ranked_video_id": ranked_video_id}
+
+    if not os.path.exists(video_path):
+        _fail_ranked_video(ranked_video_id, f"Video file not found at: {video_path}")
+        return {"status": "FAILED", "ranked_video_id": ranked_video_id}
+
+    try:
+        client = RunPodClient()
+    except ValueError as exc:
+        _fail_ranked_video(ranked_video_id, f"RunPod configuration error: {exc}")
+        return {"status": "FAILED", "ranked_video_id": ranked_video_id}
+
+    pod_id: str | None = None
+
+    try:
+        _update_ranked_video_status(ranked_video_id, "PROVISIONING_GPU")
+
+        logger.info("[%s] Creating RunPod pod…", ranked_video_id)
+        pod_id = client.create_pod()
+
+        logger.info("[%s] Waiting for pod %s to reach RUNNING…", ranked_video_id, pod_id)
+        base_url = client.wait_for_running(pod_id)
+
+        _update_ranked_video_status(ranked_video_id, "BOOTING_GPU")
+        logger.info("[%s] Waiting for TRIBEv2 health-check…", ranked_video_id)
+        client.wait_for_health(base_url)
+
+        _update_ranked_video_status(ranked_video_id, "UPLOADING")
+        job_id = _upload_video(base_url, video_path)
+
+        _update_ranked_video_status(ranked_video_id, "INFERENCE")
+        _poll_inference(base_url, job_id)
+
+        _update_ranked_video_status(ranked_video_id, "DOWNLOADING")
+        npz_bytes = _download_npz(base_url, job_id)
+
+        npz_filename = f"{Path(video.filename).stem}.npz"
+        video.npz_file.save(
+            npz_filename,
+            ContentFile(npz_bytes),
+            save=False,
+        )
+        video.inference_status = "COMPLETED"
+        video.error_message = None
+        video.save(update_fields=["npz_file", "inference_status", "error_message"])
+
+        logger.info("[%s] ═══ GPU Ranking Analysis COMPLETED ═══", ranked_video_id)
+        return {"status": "COMPLETED", "ranked_video_id": ranked_video_id}
+
+    except SoftTimeLimitExceeded:
+        _fail_ranked_video(ranked_video_id, "GPU analysis timed out after 1 hour.")
+        return {"status": "FAILED", "ranked_video_id": ranked_video_id}
+
+    except PodProvisioningError as exc:
+        retries_left = self.max_retries - self.request.retries
+        if retries_left > 0:
+            countdown = (2 ** self.request.retries) * 60
+            _update_ranked_video_status(ranked_video_id, "PENDING", error_message=f"Retrying: {exc}")
+            raise self.retry(exc=exc, countdown=countdown)
+
+        _fail_ranked_video(ranked_video_id, f"Pod provisioning failed: {exc}")
+        return {"status": "FAILED", "ranked_video_id": ranked_video_id}
+
+    except Exception as exc:
+        tb = traceback.format_exc()
+        logger.error("[%s] Unhandled exception:\n%s", ranked_video_id, tb)
+
+        retries_left = self.max_retries - self.request.retries
+        if retries_left > 0:
+            countdown = (2 ** self.request.retries) * 60
+            _update_ranked_video_status(ranked_video_id, "PENDING", error_message=f"Retrying: {exc}")
+            raise self.retry(exc=exc, countdown=countdown)
+
+        _fail_ranked_video(ranked_video_id, f"GPU analysis failed: {exc}")
+        return {"status": "FAILED", "ranked_video_id": ranked_video_id}
+
+    finally:
+        if pod_id:
+            logger.info("[%s] Deleting pod %s …", ranked_video_id, pod_id)
+            try:
+                client.delete_pod(pod_id)
+                logger.info("[%s] ✓ Pod %s deleted.", ranked_video_id, pod_id)
+            except PodCleanupError as exc:
+                logger.critical("Failed to delete pod %s: %s", pod_id, exc)
+
 
 
 # ── Watchdog Task ────────────────────────────────────────────────────────────

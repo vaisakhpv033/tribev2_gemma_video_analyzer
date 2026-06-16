@@ -152,6 +152,116 @@ class RankingSessionViewSet(
         response_serializer = RankingSessionDetailSerializer(session)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
+    @action(detail=False, methods=["post"], url_path="create-from-videos")
+    def create_from_videos(self, request, *args, **kwargs):
+        """
+        Create a new ranking session from raw video files.
+
+        Accepts multiple video files and configuration parameters.
+        Processes the files asynchronously:
+            1. Saves files to DB.
+            2. Triggers celery chord to spin up GPU pods and upload videos.
+            3. Polls inference, downloads NPZs.
+            4. Finalizes session and ranks videos.
+        """
+        from .serializers import RankingSessionVideoCreateSerializer
+        from gpu_pods.tasks import run_gpu_ranking_video_task
+        from .tasks import finalize_ranking_session_task
+        from celery import chord
+
+        serializer = RankingSessionVideoCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated_data = serializer.validated_data
+
+        # 1. Create RankingSession
+        with transaction.atomic():
+            session = RankingSession.objects.create(
+                name=validated_data.get("name", ""),
+                preset=validated_data["preset"],
+                normalization=validated_data["normalization"],
+                custom_weights=validated_data.get("custom_weights"),
+                status="PROCESSING",
+            )
+
+            videos_to_process = []
+            for uploaded_file in validated_data["video_files"]:
+                filename = Path(uploaded_file.name).stem
+                video = RankedVideo.objects.create(
+                    session=session,
+                    filename=filename,
+                    video_file=uploaded_file,
+                    inference_status="PENDING",
+                )
+                videos_to_process.append(video)
+
+        logger.info(
+            "Created background RankingSession %s with %d videos.",
+            session.id, len(videos_to_process)
+        )
+
+        # 2. Trigger celery chord
+        header = [run_gpu_ranking_video_task.s(str(video.id)) for video in videos_to_process]
+        callback = finalize_ranking_session_task.s(str(session.id))
+        chord(header)(callback)
+
+        # Return the created session detail
+        session.refresh_from_db()
+        response_serializer = RankingSessionDetailSerializer(session)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="retry-failed-videos")
+    def retry_failed_videos(self, request, pk=None):
+        """
+        Retry processing for any RankedVideo that failed inference.
+        Only successful if session is in FAILED state and there are failed videos.
+        """
+        from gpu_pods.tasks import run_gpu_ranking_video_task
+        from .tasks import finalize_ranking_session_task
+        from celery import chord
+
+        session = self.get_object()
+
+        if session.status != "FAILED":
+            return Response(
+                {"detail": "Can only retry failed sessions."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        videos = session.videos.all()
+        failed_videos = [v for v in videos if v.inference_status == "FAILED"]
+
+        if not failed_videos:
+            return Response(
+                {"detail": "No failed videos found in this session."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Reset session status
+        session.status = "PROCESSING"
+        session.error_message = None
+        session.save(update_fields=["status", "error_message"])
+
+        # Reset video statuses
+        with transaction.atomic():
+            for video in failed_videos:
+                video.inference_status = "PENDING"
+                video.error_message = None
+                video.save(update_fields=["inference_status", "error_message"])
+
+        logger.info(
+            "Retrying %d failed videos for RankingSession %s.",
+            len(failed_videos), session.id
+        )
+
+        # Trigger celery chord for the failed videos
+        header = [run_gpu_ranking_video_task.s(str(video.id)) for video in failed_videos]
+        callback = finalize_ranking_session_task.s(str(session.id))
+        chord(header)(callback)
+
+        session.refresh_from_db()
+        response_serializer = RankingSessionDetailSerializer(session)
+        return Response(response_serializer.data, status=status.HTTP_202_ACCEPTED)
+
     @action(detail=True, methods=["get"])
     def videos(self, request, pk=None):
         """List all ranked videos for a specific session."""
