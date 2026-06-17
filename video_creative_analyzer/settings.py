@@ -68,6 +68,7 @@ INSTALLED_APPS = [
     'gpu_pods',
     'performance_analyzer',
     'neural_ranker',
+    'video_comparator',
 ]
 
 MIDDLEWARE = [

@@ -15,6 +15,7 @@ urlpatterns = [
     path("", include("analyzer.urls")),
     path("api/v1/", include("performance_analyzer.urls")),
     path("api/v1/", include("neural_ranker.urls")),
+    path("api/v1/comparator/", include("video_comparator.urls")),
 ]
 
 # Serve uploaded media files during local development.
