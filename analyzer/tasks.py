@@ -13,7 +13,7 @@ from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 
 from analyzer.models import VideoAnalysis
-from analyzer.utils.gemini_client import get_gemini_client
+from analyzer.utils.gemini_client import get_gemini_client, clean_json_response
 from analyzer.utils.analysis_modes import (
     run_combination_analysis,
     run_gemini_only_analysis,
@@ -102,7 +102,8 @@ def run_analysis_task(self, analysis_id: str) -> dict:
         # 4. Parse JSON and persist results
         # ------------------------------------------------------------------
         logger.info("Parsing LLM response JSON for analysis_id=%s…", analysis_id)
-        analysis_data = json.loads(raw_json_str)
+        cleaned_json_str = clean_json_response(raw_json_str)
+        analysis_data = json.loads(cleaned_json_str)
         video_analysis.mark_completed(analysis_data)
 
         logger.info(

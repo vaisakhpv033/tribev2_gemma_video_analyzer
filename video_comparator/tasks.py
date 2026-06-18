@@ -4,7 +4,7 @@ from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 
 from .models import VideoComparison
-from analyzer.utils.gemini_client import get_gemini_client
+from analyzer.utils.gemini_client import get_gemini_client, clean_json_response
 from .utils.comparison_modes import run_combination_comparison, format_neural_context
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,8 @@ def run_video_comparison_task(self, comparison_id: str) -> dict:
         raw_json_str = run_combination_comparison(client, path1, path2, neural_context=neural_context_str)
 
         logger.info("Parsing LLM comparison response JSON for id=%s...", comparison_id)
-        analysis_data = json.loads(raw_json_str)
+        cleaned_json_str = clean_json_response(raw_json_str)
+        analysis_data = json.loads(cleaned_json_str)
         comparison_job.mark_completed(analysis_data)
 
         logger.info("Comparison COMPLETED for id=%s", comparison_id)

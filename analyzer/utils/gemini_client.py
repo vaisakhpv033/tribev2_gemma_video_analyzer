@@ -104,3 +104,25 @@ def cleanup_gemini_files(client: genai.Client, files: List) -> None:
             logger.warning(
                 "Failed to delete Gemini file '%s': %s", file_obj.name, exc
             )
+
+
+def clean_json_response(raw_str: str) -> str:
+    """
+    Strips markdown code block formatting (e.g. ```json ... ```) from LLM output.
+    
+    Args:
+        raw_str: The raw string response from the LLM.
+        
+    Returns:
+        The cleaned JSON string ready for json.loads().
+    """
+    s = raw_str.strip()
+    if s.startswith("```json"):
+        s = s[7:]
+    elif s.startswith("```"):
+        s = s[3:]
+        
+    if s.endswith("```"):
+        s = s[:-3]
+        
+    return s.strip()
