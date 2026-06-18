@@ -5,9 +5,44 @@ from celery.exceptions import SoftTimeLimitExceeded
 
 from .models import VideoComparison
 from analyzer.utils.gemini_client import get_gemini_client
-from .utils.comparison_modes import run_combination_comparison
+from .utils.comparison_modes import run_combination_comparison, format_neural_context
 
 logger = logging.getLogger(__name__)
+
+@shared_task(
+    bind=True,
+    name="video_comparator.tasks.finalize_video_comparison_pipeline",
+    max_retries=3,
+    default_retry_delay=60,
+    acks_late=True,
+)
+def finalize_video_comparison_pipeline(self, results: list, comparison_id: str) -> dict:
+    from neural_ranker.services.ranking_orchestration import finalize_session
+    try:
+        comparison_job = VideoComparison.objects.get(id=comparison_id)
+    except VideoComparison.DoesNotExist:
+        logger.error("VideoComparison %s not found.", comparison_id)
+        return {"status": "FAILED", "comparison_id": comparison_id}
+        
+    session = comparison_job.ranking_session
+    if not session:
+        msg = "No ranking session found for VideoComparison"
+        logger.error(msg)
+        comparison_job.mark_failed(msg)
+        return {"status": "FAILED", "comparison_id": comparison_id}
+
+    success, error = finalize_session(str(session.id), results)
+    if not success:
+        comparison_job.mark_failed(f"Neural ranking failed: {error}")
+        return {"status": "FAILED", "comparison_id": comparison_id, "error": error}
+        
+    # Trigger Gemma task
+    task = run_video_comparison_task.delay(comparison_id)
+    comparison_job.celery_task_id = task.id
+    comparison_job.save(update_fields=["celery_task_id"])
+    
+    return {"status": "COMPLETED", "comparison_id": comparison_id}
+
 
 @shared_task(
     bind=True,
@@ -41,8 +76,17 @@ def run_video_comparison_task(self, comparison_id: str) -> dict:
         client = get_gemini_client()
         path1 = comparison_job.video1_file.path
         path2 = comparison_job.video2_file.path
+        
+        neural_context_str = None
+        if comparison_job.ranking_session and comparison_job.ranking_session.status == "COMPLETED":
+            videos = list(comparison_job.ranking_session.videos.order_by('rank'))
+            v1_data = next((v for v in videos if v.filename == "video1"), None)
+            v2_data = next((v for v in videos if v.filename == "video2"), None)
+            
+            if v1_data and v2_data:
+                neural_context_str = format_neural_context(v1_data, v2_data)
 
-        raw_json_str = run_combination_comparison(client, path1, path2)
+        raw_json_str = run_combination_comparison(client, path1, path2, neural_context=neural_context_str)
 
         logger.info("Parsing LLM comparison response JSON for id=%s...", comparison_id)
         analysis_data = json.loads(raw_json_str)
@@ -71,7 +115,7 @@ def run_video_comparison_task(self, comparison_id: str) -> dict:
 
         if self.request.retries < self.max_retries:
             logger.info("Retrying task for id=%s...", comparison_id)
-            comparison_job.status = "PENDING"
+            comparison_job.status = "PROCESSING"
             comparison_job.save(update_fields=["status"])
             raise self.retry(exc=exc)
 

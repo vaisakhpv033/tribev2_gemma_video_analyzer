@@ -1,7 +1,10 @@
 from rest_framework import serializers
 from .models import VideoComparison
+from neural_ranker.serializers import RankingSessionDetailSerializer
 
 class VideoComparisonSerializer(serializers.ModelSerializer):
+    ranking_session = RankingSessionDetailSerializer(read_only=True)
+
     class Meta:
         model = VideoComparison
         fields = [
@@ -14,6 +17,7 @@ class VideoComparisonSerializer(serializers.ModelSerializer):
             "celery_task_id",
             "winner",
             "raw_analysis",
+            "ranking_session",
             "error_message",
             "created_at",
             "completed_at",
@@ -24,6 +28,7 @@ class VideoComparisonSerializer(serializers.ModelSerializer):
             "celery_task_id",
             "winner",
             "raw_analysis",
+            "ranking_session",
             "error_message",
             "created_at",
             "completed_at",

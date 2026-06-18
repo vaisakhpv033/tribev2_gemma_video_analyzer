@@ -42,7 +42,9 @@ class RankingSessionViewSet(
     API endpoint for managing Neural Video Ranking sessions.
     """
 
-    queryset = RankingSession.objects.all()
+    def get_queryset(self):
+        return RankingSession.objects.filter(pipeline_type="neural_ranking")
+
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_serializer_class(self):

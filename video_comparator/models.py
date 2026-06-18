@@ -35,6 +35,13 @@ class VideoComparison(models.Model):
     # Output fields populated by LLM
     winner = models.CharField(max_length=20, choices=WINNER_CHOICES, null=True, blank=True)
     raw_analysis = models.JSONField(null=True, blank=True, help_text="Structured JSON from Gemma 4")
+    ranking_session = models.OneToOneField(
+        "neural_ranker.RankingSession",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text="Linked ranking session for intermediate results"
+    )
     error_message = models.TextField(null=True, blank=True)
 
     # Timestamps

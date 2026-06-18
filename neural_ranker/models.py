@@ -43,6 +43,11 @@ class RankingSession(models.Model):
         ("percentile", "Percentile Rank"),
     ]
 
+    PIPELINE_TYPE_CHOICES = [
+        ("video_comparison", "Video Comparison"),
+        ("neural_ranking", "Neural Ranking"),
+    ]
+
     # ------------------------------------------------------------------
     # Core fields
     # ------------------------------------------------------------------
@@ -56,6 +61,13 @@ class RankingSession(models.Model):
         blank=True,
         default="",
         help_text="Optional label for this ranking session (e.g. 'June Campaign Test').",
+    )
+    pipeline_type = models.CharField(
+        max_length=20,
+        choices=PIPELINE_TYPE_CHOICES,
+        default="neural_ranking",
+        db_index=True,
+        help_text="The type of pipeline this session belongs to.",
     )
 
     # Configuration

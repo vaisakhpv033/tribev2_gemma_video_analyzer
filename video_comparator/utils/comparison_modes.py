@@ -1,5 +1,6 @@
 import logging
 import os
+import json
 from google.genai import types
 
 from analyzer.utils.gemini_client import get_gemini_client, wait_for_file_active, cleanup_gemini_files
@@ -17,32 +18,73 @@ _AUDIO_EXTRACTION_PROMPT = (
 )
 
 _COMPARISON_SYSTEM_PROMPT = (
-    "You are an elite Mobile Game User Acquisition (UA) Creative Director and Expert Ad Video Analyst. "
-    "Your role is to compare two mobile game advertising videos and synthesize visual and audio insights "
-    "into a high-quality structured marketing review to determine which is better and why.\n\n"
-    "You must produce a structured JSON output that maps to the requested schema."
+    "You are an elite Mobile Game User Acquisition (UA) Creative Director, Behavioral Psychologist, and Expert Ad Video Analyst. "
+    "Your role is to compare two mobile game advertising videos and synthesize visual, audio, and quantitative neural insights "
+    "into a high-quality, structured, data-driven marketing review to determine which is better and why.\n\n"
+    "CRITICAL GUIDELINES FOR NEURAL METRICS:\n"
+    "1. NO HALLUCINATION: You must rely strictly on the definitions provided for the neural metrics. Do not invent your own interpretations of the brain metrics.\n"
+    "2. CONTEXT AWARENESS: The neural scores are normalized on a 0-100 scale. They are derived from the TRIBEv2 Brain-Computer Interface model predicting actual human fMRI/EEG region activations based on video stimuli.\n"
+    "3. DIMENSION DEFINITIONS:\n"
+    "   - Attention Capture (Hook): Speed of onset and engagement in the first 3 seconds.\n"
+    "   - Sustained Focus: Dorsal Attention Network activation and DMN suppression (indicates being deeply absorbed in the content without mind-wandering).\n"
+    "   - Novelty Salience: Salience Network spikes indicating surprise, \"scroll-stopping\" moments, or unexpected events.\n"
+    "   - Emotional Resonance: Insula, Orbitofrontal, and Cingulate activation reflecting affective emotional response.\n"
+    "   - Memory Encoding: Parahippocampal and Precuneus activation indicating the content is being stored into long-term memory (critical for brand recall).\n"
+    "   - Narrative Language: Broca/Wernicke activation indicating the user is actively parsing text/VO messages.\n"
+    "   - Visual/Auditory Engagement: Raw sensory processing cortex activation.\n\n"
+    "You must produce a structured JSON output that perfectly maps to the requested schema. Ground your visual analysis by citing these neural scores as objective evidence."
 )
 
-def _build_comparison_prompt(audio_insights_1: str, audio_insights_2: str) -> str:
-    return (
-        "Please perform a comprehensive comparative analysis of these TWO mobile game advertising videos.\n\n"
-        "To help you analyze them fully, we have extracted the audio track insights using a separate audio-capable model.\n"
-        "Here are the audio insights for VIDEO 1:\n"
-        "[Audio Insights Video 1 Start]\n"
-        f"{audio_insights_1}\n"
-        "[Audio Insights Video 1 End]\n\n"
-        "Here are the audio insights for VIDEO 2:\n"
-        "[Audio Insights Video 2 Start]\n"
-        f"{audio_insights_2}\n"
-        "[Audio Insights Video 2 End]\n\n"
-        "Combine these audio insights with your visual analysis of the silent videos. Note that Video 1 is the first video "
-        "attached, and Video 2 is the second video attached.\n"
-        "Compare them based on:\n"
-        "1. Strengths and weaknesses of each specific video.\n"
-        "2. A comparison of their first 3-second hooks.\n"
-        "3. A comparison of their core messaging and CTA.\n"
-        "4. A final audit declaring the winner (or a tie) and explaining why, plus actionable ideas to combine their best elements."
+def format_neural_context(v1_data, v2_data) -> str:
+    def format_video(v, num):
+        return (
+            f"VIDEO {num} NEURAL PROFILE:\n"
+            f"- Rank: #{v.rank}\n"
+            f"- Overall Cognitive Score: {v.overall_score:.1f}/100\n"
+            f"- Dimension Scores: {json.dumps(v.dimension_scores, indent=2)}\n"
+            f"- Detected Neural Strengths: {', '.join(v.strengths or [])}\n"
+            f"- Detected Neural Weaknesses: {', '.join(v.weaknesses or [])}\n"
+        )
+    
+    context = (
+        "We have pre-processed these videos using our proprietary TRIBEv2 model, which extracts 75 functional brain features. "
+        "The metrics below are normalized relative scores (0-100) representing how strongly the video triggers specific cognitive states in the human brain.\n\n"
+        "Here are the calculated neural profiles for both videos:\n\n"
     )
+    context += format_video(v1_data, 1) + "\n"
+    context += format_video(v2_data, 2) + "\n"
+    context += (
+        "When writing your review, explicitly correlate high/low neural scores with the specific visual or audio events happening in the video. "
+        "For example, if 'Memory Encoding' is high, point out what visual/audio element might be causing it and why it helps UA.\n"
+    )
+    return context
+
+def _build_comparison_prompt(audio_insights_1: str, audio_insights_2: str, neural_context: str = None) -> str:
+    prompt = "Please perform a comprehensive comparative analysis of these TWO mobile game advertising videos.\n\n"
+    
+    if neural_context:
+        prompt += "====== NEURAL INSIGHTS ======\n"
+        prompt += f"{neural_context}\n"
+        prompt += "=============================\n\n"
+        
+    prompt += (
+        "====== AUDIO INSIGHTS ======\n"
+        "To help you analyze them fully, we extracted the audio track insights using a separate multimodal model.\n\n"
+        "VIDEO 1 AUDIO:\n"
+        f"{audio_insights_1}\n\n"
+        "VIDEO 2 AUDIO:\n"
+        f"{audio_insights_2}\n"
+        "============================\n\n"
+        "YOUR TASK:\n"
+        "Combine the quantitative Neural Insights and qualitative Audio Insights with your own expert visual analysis of the silent videos attached. "
+        "(Note: Video 1 is the first attached file, and Video 2 is the second attached file).\n\n"
+        "Compare them based on:\n"
+        "1. Strengths and weaknesses of each specific video, backing up your claims with the neural scores.\n"
+        "2. A comparison of their first 3-second hooks, leveraging the 'Attention Capture' and 'Novelty Salience' scores.\n"
+        "3. A comparison of their core messaging and CTA, leveraging the 'Memory Encoding' and 'Narrative Language' scores.\n"
+        "4. A final audit declaring the winner (or a tie) and explaining why, plus an actionable 'Hybrid Idea' to combine their best elements."
+    )
+    return prompt
 
 def _structured_config(system_instruction: str) -> types.GenerateContentConfig:
     """Create a GenerateContentConfig for structured JSON output."""
@@ -52,7 +94,7 @@ def _structured_config(system_instruction: str) -> types.GenerateContentConfig:
         response_schema=AdVideoComparisonResult,
     )
 
-def run_combination_comparison(client, path1: str, path2: str) -> str:
+def run_combination_comparison(client, path1: str, path2: str, neural_context: str = None) -> str:
     """
     Two-stage comparison combining Gemini 2.5 Flash (audio) with Gemma 4 31B (visual).
 
@@ -60,6 +102,7 @@ def run_combination_comparison(client, path1: str, path2: str) -> str:
         client: An authenticated genai.Client instance.
         path1: Absolute path to the source video 1.
         path2: Absolute path to the source video 2.
+        neural_context: Optional pre-calculated neural metrics to inject into the prompt.
 
     Returns:
         Raw JSON string conforming to AdVideoComparisonResult schema.
@@ -118,7 +161,7 @@ def run_combination_comparison(client, path1: str, path2: str) -> str:
         uploaded_files.append(silent_video2)
         silent_video2 = wait_for_file_active(client, silent_video2)
 
-        comparison_prompt = _build_comparison_prompt(audio_insights1, audio_insights2)
+        comparison_prompt = _build_comparison_prompt(audio_insights1, audio_insights2, neural_context=neural_context)
 
         logger.info("Running Gemma 31B comparative analysis...")
         response = client.models.generate_content(
